@@ -664,7 +664,7 @@ class Starlite(Router):
                 fn=cast("AnyCallable", unwrap_partial(route_handler.fn.value)),
                 plugins=self.plugins,
                 dependency_names=route_handler.dependency_name_set,
-            ).create_signature_model()
+            )()
 
         for provider in list(route_handler.resolve_dependencies().values()):
             if not getattr(provider, "signature_model", None):
@@ -672,7 +672,7 @@ class Starlite(Router):
                     fn=provider.dependency.value,
                     plugins=self.plugins,
                     dependency_names=route_handler.dependency_name_set,
-                ).create_signature_model()
+                )()
 
     def _wrap_send(self, send: "Send", scope: "Scope") -> "Send":
         """Wrap the ASGI send and handles any 'before send' hooks.

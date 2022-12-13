@@ -18,7 +18,7 @@ from typing import (
     TypeVar,
     Union,
 )
-
+from dataclasses import Field as DataclassField
 from starlite.enums import ScopeType
 
 from .asgi_types import ASGIApp
@@ -60,3 +60,4 @@ Middleware = Union[
     Callable[..., ASGIApp], DefineMiddleware, Iterator[Tuple[ASGIApp, Dict[str, Any]]], Type[MiddlewareProtocol]
 ]
 MaybePartial = Union[T, partial]
+DataclassFields = Tuple[DataclassField, ...]

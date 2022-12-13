@@ -1,3 +1,4 @@
+from dataclasses import make_dataclass
 from inspect import Parameter, Signature
 from typing import (
     TYPE_CHECKING,
@@ -13,11 +14,11 @@ from typing import (
     cast,
 )
 
-from pydantic import BaseConfig, BaseModel, ValidationError, create_model
-from pydantic.fields import FieldInfo, Undefined
 from pydantic_factories import ModelFactory
+from dataclasses import MISSING
 from typing_extensions import get_args
-
+from dataclasses import fields as get_dataclass_fields
+from dataclasses import Field as DataclassField
 from starlite.connection import Request
 from starlite.enums import ScopeType
 from starlite.exceptions import (
@@ -41,21 +42,19 @@ if TYPE_CHECKING:
     from starlite.types import AnyCallable
 
 
-UNDEFINED_SENTINELS = {Undefined, Signature.empty}
 SKIP_NAMES = {"self", "cls"}
 SKIP_VALIDATION_NAMES = {"request", "socket", "scope", "receive", "send"}
 
 
-class SignatureModel(BaseModel):
-    """Pydantic model representing a signature."""
+class SignatureModel:
+    """Dataclass representing a function's signature."""
 
-    class Config(BaseConfig):
-        copy_on_model_validation = "none"
-        arbitrary_types_allowed = True
+    __slots__ = ("dependency_name_set", "field_plugin_mappings", "return_annotation", "dataclass_fields")
 
     dependency_name_set: ClassVar[Set[str]]
     field_plugin_mappings: ClassVar[Dict[str, PluginMapping]]
     return_annotation: ClassVar[Any]
+    dataclass_fields: ClassVar[Tuple[DataclassField, ...]]
 
     @classmethod
     def parse_values_from_connection_kwargs(cls, connection: "ASGIConnection", **kwargs: Any) -> Dict[str, Any]:
@@ -65,26 +64,23 @@ class SignatureModel(BaseModel):
         This is not equivalent to calling the '.dict'  method of the pydantic model, because it doesn't convert nested
         values into dictionary, just extracts the data from the signature model
         """
-        try:
-            signature = cls(**kwargs)
-            if signature.field_plugin_mappings:
-                return {key: signature.resolve_field_value(key) for key in cls.__fields__}
-            return {
-                key: signature.__getattribute__(key)  # pylint: disable=unnecessary-dunder-call
-                for key in cls.__fields__
-            }
-        except ValidationError as exc:
-            raise cls.construct_exception(connection, exc) from exc
+        signature = cls(**kwargs)
+        if signature.field_plugin_mappings:
+            return {field.name: signature.resolve_field_value(field.name) for field in cls.dataclass_fields}
+        return {
+            field.name: getattr(cls, field.name)  # pylint: disable=unnecessary-dunder-call
+            for field in cls.dataclass_fields
+        }
 
-    def resolve_field_value(self, key: str) -> Any:
+    def resolve_field_value(self, field_name: str) -> Any:
         """Given a field key, return value using plugin mapping, if available."""
-        value = self.__getattribute__(key)  # pylint: disable=unnecessary-dunder-call
-        mapping = self.field_plugin_mappings.get(key)
+        value = self.__getattribute__(field_name)  # pylint: disable=unnecessary-dunder-call
+        mapping = self.field_plugin_mappings.get(field_name)
         return mapping.get_model_instance_for_value(value) if mapping else value
 
     @classmethod
     def construct_exception(
-        cls, connection: "ASGIConnection", exc: ValidationError
+        cls, connection: "ASGIConnection", exc: Exception
     ) -> Union[InternalServerException, ValidationException]:
         """Distinguish between validation errors that arise from parameters and dependencies.
 
@@ -148,7 +144,7 @@ class SignatureParameter:
             parameter_name: Name of parameter.
             parameter: inspect.Parameter
         """
-        if parameter.annotation is Signature.empty:
+        if parameter.annotation in {Signature.empty, MISSING}:
             raise ImproperlyConfiguredException(
                 f"Kwarg {parameter_name} of {fn_name} does not have a type annotation. If it "
                 f"should receive any value, use the 'Any' type."
@@ -157,11 +153,6 @@ class SignatureParameter:
         self.default = parameter.default
         self.name = parameter_name
         self.optional = is_optional_union(parameter.annotation)
-
-    @property
-    def default_defined(self) -> bool:
-        """Return a boolean, indicating if `self.default` is not one of the undefined sentinel types."""
-        return self.default not in UNDEFINED_SENTINELS
 
 
 class SignatureModelFactory:
@@ -204,7 +195,7 @@ class SignatureModelFactory:
         fn = unwrap_partial(fn)
         self.signature = Signature.from_callable(fn)
         self.fn_name = getattr(fn, "__name__", "anonymous")
-        self.fn_module_name = getattr(fn, "__module__", "pydantic.main")
+        self.fn_module_name = getattr(fn, "__module__", None)
         self.plugins = plugins
         self.field_plugin_mappings: Dict[str, PluginMapping] = {}
         self.field_definitions: Dict[str, Any] = {}
@@ -225,8 +216,7 @@ class SignatureModelFactory:
             return
         if not is_dependency_field(parameter.default):
             return
-        field_info: FieldInfo = parameter.default
-        if field_info.default is not Undefined:
+        if parameter.default is not MISSING:
             return
         if parameter.name not in self.dependency_name_set:
             raise ImproperlyConfiguredException(
@@ -249,7 +239,7 @@ class SignatureModelFactory:
         Args:
             parameter: SignatureParameter
         """
-        if parameter.default_defined:
+        if parameter.default not in {Signature.empty, MISSING}:
             self.defaults[parameter.name] = parameter.default
 
     def get_type_annotation_from_plugin(self, parameter: SignatureParameter, plugin: PluginProtocol) -> Any:
@@ -280,7 +270,7 @@ class SignatureModelFactory:
         Returns:
             tuple[Any, Any]
         """
-        if parameter.default_defined:
+        if parameter.default not in {Signature.empty, MISSING}:
             return parameter.annotation, parameter.default
         if not parameter.optional:
             return parameter.annotation, ...
@@ -309,7 +299,7 @@ class SignatureModelFactory:
         """
         return parameter.name in SKIP_VALIDATION_NAMES or should_skip_dependency_validation(parameter.default)
 
-    def create_signature_model(self) -> Type[SignatureModel]:
+    def __call__(self) -> Type[SignatureModel]:
         """Construct a `SignatureModel` type that represents the signature of `self.fn`
 
         Returns:
@@ -333,16 +323,17 @@ class SignatureModelFactory:
                 if plugin:
                     parameter.annotation = self.get_type_annotation_from_plugin(parameter, plugin)
                 self.field_definitions[parameter.name] = self.create_field_definition_from_parameter(parameter)
-            model: Type[SignatureModel] = create_model(
-                self.fn_name + "_signature_model",
-                __base__=SignatureModel,
-                __module__=self.fn_module_name,
-                **self.field_definitions,
+            model = make_dataclass(
+                cls_name=self.fn_name + "_signature_model",
+                fields=self.field_definitions,
+                bases=(SignatureModel,),
             )
+            model.__slots__ = (*SignatureModel.__slots__, *set(self.field_definitions))
+            model.dataclass_fields = get_dataclass_fields(model)
             model.return_annotation = self.signature.return_annotation
             model.field_plugin_mappings = self.field_plugin_mappings
             model.dependency_name_set = self.dependency_name_set
-            return model
+            return cast("Type[SignatureModel]", model)
         except TypeError as e:
             raise ImproperlyConfiguredException(f"Error creating signature model for '{self.fn_name}': '{e}'") from e
 

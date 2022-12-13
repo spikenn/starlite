@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Optional
+
 import pytest
 
 from starlite.testing import create_test_client
@@ -37,3 +40,11 @@ def test_life_span_shutdown_error_handling() -> None:
     life_span_callable = _LifeSpanCallable(should_raise=True)
     with pytest.raises(RuntimeError), create_test_client([], on_shutdown=[life_span_callable]):
         pass
+
+
+def test_dataclass() -> None:
+    @dataclass
+    class MyClass:
+        x: Optional[str]
+
+    y = MyClass(x=None)

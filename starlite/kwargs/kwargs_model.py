@@ -1,3 +1,4 @@
+from dataclasses import Field
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -12,17 +13,6 @@ from typing import (
 )
 
 from anyio import create_task_group
-from pydantic.fields import (
-    SHAPE_DEQUE,
-    SHAPE_FROZENSET,
-    SHAPE_LIST,
-    SHAPE_SEQUENCE,
-    SHAPE_SET,
-    SHAPE_TUPLE,
-    SHAPE_TUPLE_ELLIPSIS,
-    ModelField,
-    Undefined,
-)
 from pydantic_factories.utils import is_optional
 
 from starlite.constants import EXTRA_KEY_IS_PARAMETER, RESERVED_KWARGS
@@ -53,10 +43,11 @@ from starlite.kwargs.parameter_definition import (
     merge_parameter_sets,
 )
 from starlite.signature import SignatureModel, get_signature_model
+from starlite.utils.dataclass import is_optional_dataclass_field
 
 if TYPE_CHECKING:
     from starlite.connection import ASGIConnection
-    from starlite.types import ReservedKwargs
+    from starlite.types import ReservedKwargs, DataclassFields
 
 
 class KwargsModel:
@@ -85,8 +76,8 @@ class KwargsModel:
         *,
         expected_cookie_params: Set[ParameterDefinition],
         expected_dependencies: Set[Dependency],
-        expected_form_data: Optional[Tuple[RequestEncodingType, ModelField]],
-        expected_msgpack_data: Optional[ModelField],
+        expected_form_data: Optional[Tuple[RequestEncodingType, Field]],
+        expected_msgpack_data: Optional[Field],
         expected_header_params: Set[ParameterDefinition],
         expected_path_params: Set[ParameterDefinition],
         expected_query_params: Set[ParameterDefinition],
@@ -188,9 +179,9 @@ class KwargsModel:
     def _get_param_definitions(
         cls,
         path_parameters: Set[str],
-        layered_parameters: Dict[str, ModelField],
+        layered_parameters: Dict[str, Field],
         dependencies: Dict[str, Provide],
-        signature_model_fields: Dict[str, ModelField],
+        signature_dataclass_fields: Dict[str, Field],
     ) -> Tuple[Set[ParameterDefinition], Set[Dependency]]:
         """Get parameter_definitions for the construction of KwargsModel instance.
 
@@ -198,59 +189,49 @@ class KwargsModel:
             path_parameters: Any expected path parameters.
             layered_parameters: A string keyed dictionary of layered parameters.
             dependencies: A string keyed dictionary mapping dependency providers.
-            signature_model_fields: __fields__ definition from SignatureModel.
+            signature_dataclass_fields: __fields__ definition from SignatureModel.
 
         Returns:
             A Tuple of sets
         """
-        sequence_shapes = {
-            SHAPE_LIST,
-            SHAPE_SET,
-            SHAPE_SEQUENCE,
-            SHAPE_TUPLE,
-            SHAPE_TUPLE_ELLIPSIS,
-            SHAPE_DEQUE,
-            SHAPE_FROZENSET,
-        }
-
         expected_dependencies = {
             cls._create_dependency_graph(key=key, dependencies=dependencies)
             for key in dependencies
-            if key in signature_model_fields
+            if key in signature_dataclass_fields
         }
         ignored_keys = {*RESERVED_KWARGS, *(dependency.key for dependency in expected_dependencies)}
 
         param_definitions = {
             *(
                 create_parameter_definition(
-                    allow_none=model_field.allow_none,
+                    allow_none=dataclass_field.type,
                     field_name=field_name,
-                    field_info=model_field.field_info,
+                    field_info=dataclass_field.field_info,
                     path_parameters=path_parameters,
-                    is_sequence=model_field.shape in sequence_shapes,
+                    is_sequence=dataclass_field.shape in sequence_shapes,
                 )
-                for field_name, model_field in layered_parameters.items()
-                if field_name not in ignored_keys and field_name not in signature_model_fields
+                for field_name, dataclass_field in layered_parameters.items()
+                if field_name not in ignored_keys and field_name not in signature_dataclass_fields
             ),
             *(
                 create_parameter_definition(
-                    allow_none=model_field.allow_none,
+                    allow_none=is_optional_dataclass_field(dataclass_field),
                     field_name=field_name,
-                    field_info=model_field.field_info,
+                    field_info=dataclass_field.metadata,
                     path_parameters=path_parameters,
-                    is_sequence=model_field.shape in sequence_shapes,
+                    is_sequence=dataclass_field.shape in sequence_shapes,
                 )
-                for field_name, model_field in signature_model_fields.items()
+                for field_name, dataclass_field in signature_dataclass_fields.items()
                 if field_name not in ignored_keys and field_name not in layered_parameters
             ),
         }
 
-        for field_name, model_field in filter(
+        for field_name, dataclass_field in filter(
             lambda items: items[0] not in ignored_keys and items[0] in layered_parameters,
-            signature_model_fields.items(),
+            signature_dataclass_fields.items(),
         ):
             layer_field_info = layered_parameters[field_name].field_info
-            signature_field_info = model_field.field_info
+            signature_field_info = dataclass_field.field_info
 
             field_info = layer_field_info
             # allow users to manually override Parameter definition using Parameter
@@ -259,17 +240,17 @@ class KwargsModel:
 
             field_info.default = (
                 signature_field_info.default
-                if signature_field_info.default not in {Undefined, Ellipsis}
+                if signature_field_info.default not in {Ellipsis}
                 else layer_field_info.default
             )
 
             param_definitions.add(
                 create_parameter_definition(
-                    allow_none=model_field.allow_none,
+                    allow_none=dataclass_field.allow_none,
                     field_name=field_name,
                     field_info=field_info,
                     path_parameters=path_parameters,
-                    is_sequence=model_field.shape in sequence_shapes,
+                    is_sequence=dataclass_field.shape in sequence_shapes,
                 )
             )
         return param_definitions, expected_dependencies
@@ -280,7 +261,7 @@ class KwargsModel:
         signature_model: Type[SignatureModel],
         dependencies: Dict[str, Provide],
         path_parameters: Set[str],
-        layered_parameters: Dict[str, ModelField],
+        layered_parameters: Dict[str, Field],
     ) -> "KwargsModel":
         """Pre-determine what parameters are required for a given combination of route + route handler. It is executed
         during the application bootstrap process.
@@ -297,15 +278,18 @@ class KwargsModel:
         cls._validate_raw_kwargs(
             path_parameters=path_parameters,
             dependencies=dependencies,
-            model_fields=signature_model.__fields__,
+            dataclass_fields=signature_model.dataclass_fields,
             layered_parameters=layered_parameters,
         )
         expected_reserved_kwargs = {
-            field_name for field_name in signature_model.__fields__ if field_name in RESERVED_KWARGS
+            field.name for field in signature_model.dataclass_fields if field.name in RESERVED_KWARGS
         }
 
         param_definitions, expected_dependencies = cls._get_param_definitions(
-            path_parameters, layered_parameters, dependencies, signature_model_fields=signature_model.__fields__
+            path_parameters,
+            layered_parameters,
+            dependencies,
+            signature_dataclass_fields=signature_model.dataclass_fields,
         )
 
         expected_path_parameters = {p for p in param_definitions if p.param_type == ParamType.PATH}
@@ -316,17 +300,17 @@ class KwargsModel:
 
         expected_form_data = None
         expected_msgpack_data = None
-        data_model_field = signature_model.__fields__.get("data")
+        data_dataclass_field = signature_model.__fields__.get("data")
 
-        if data_model_field:
-            media_type = data_model_field.field_info.extra.get("media_type")
+        if data_dataclass_field:
+            media_type = data_dataclass_field.field_info.extra.get("media_type")
             if media_type in (
                 RequestEncodingType.MULTI_PART,
                 RequestEncodingType.URL_ENCODED,
             ):
-                expected_form_data = (media_type, data_model_field)
+                expected_form_data = (media_type, data_dataclass_field)
             elif media_type == RequestEncodingType.MESSAGEPACK:
-                expected_msgpack_data = data_model_field
+                expected_msgpack_data = data_dataclass_field
 
         for dependency in expected_dependencies:
             dependency_kwargs_model = cls.create_for_signature_model(
@@ -422,7 +406,7 @@ class KwargsModel:
     @classmethod
     def _validate_dependency_data(
         cls,
-        expected_form_data: Optional[Tuple[RequestEncodingType, ModelField]],
+        expected_form_data: Optional[Tuple[RequestEncodingType, Field]],
         dependency_kwargs_model: "KwargsModel",
     ) -> None:
         """Validate that the 'data' kwarg is compatible across dependencies."""
@@ -442,9 +426,9 @@ class KwargsModel:
     def _validate_raw_kwargs(
         cls,
         path_parameters: Set[str],
-        dependencies: Dict[str, Provide],
-        model_fields: Dict[str, ModelField],
-        layered_parameters: Dict[str, ModelField],
+        dependencies: Dict[str, "Provide"],
+        dataclass_fields: "DataclassFields",
+        layered_parameters: Dict[str, "Field"],
     ) -> None:
         """Validate that there are no ambiguous kwargs, that is, kwargs declared using the same key in different
         places.
@@ -453,11 +437,11 @@ class KwargsModel:
 
         parameter_names = {
             *(
-                k
-                for k, f in model_fields.items()
-                if f.field_info.extra.get(ParamType.QUERY)
-                or f.field_info.extra.get(ParamType.HEADER)
-                or f.field_info.extra.get(ParamType.COOKIE)
+                f.name
+                for f in dataclass_fields
+                if f.metadata.get(ParamType.QUERY)
+                or f.metadata.get(ParamType.HEADER)
+                or f.metadata.get(ParamType.COOKIE)
             ),
             *list(layered_parameters.keys()),
         }

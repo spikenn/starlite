@@ -67,6 +67,7 @@ from .composite_types import (
     ResponseCookies,
     ResponseHeadersMap,
     Scopes,
+    DataclassFields,
 )
 from .empty import Empty, EmptyType
 from .file_types import FileInfo, FileSystemProtocol
@@ -97,6 +98,7 @@ __all__ = (
     "BeforeRequestHookHandler",
     "CacheKeyBuilder",
     "ControllerRouterHandler",
+    "DataclassFields",
     "Dependencies",
     "Empty",
     "EmptyType",
