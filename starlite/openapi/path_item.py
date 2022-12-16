@@ -1,5 +1,5 @@
 from inspect import cleandoc
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from pydantic_openapi_schema.v3_1_0.operation import Operation
 from pydantic_openapi_schema.v3_1_0.path_item import PathItem
@@ -7,10 +7,10 @@ from pydantic_openapi_schema.v3_1_0.path_item import PathItem
 from starlite.openapi.parameters import create_parameter_for_handler
 from starlite.openapi.request_body import create_request_body
 from starlite.openapi.responses import create_responses
+from starlite.utils import convert_dataclass_to_model
 from starlite.utils.helpers import unwrap_partial
 
 if TYPE_CHECKING:
-    from pydantic import BaseModel
     from pydantic_openapi_schema.v3_1_0 import SecurityRequirement
 
     from starlite.handlers import HTTPRouteHandler
@@ -67,7 +67,7 @@ def create_path_item(
     for http_method, handler_tuple in route.route_handler_map.items():
         route_handler, _ = handler_tuple
         if route_handler.include_in_schema:
-            handler_fields = cast("BaseModel", route_handler.signature_model).__fields__
+            handler_fields = convert_dataclass_to_model(route_handler.signature_model).__fields__
             parameters = (
                 create_parameter_for_handler(
                     route_handler=route_handler,

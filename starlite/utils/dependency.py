@@ -17,7 +17,7 @@ def is_dependency_field(val: Any) -> "TypeGuard[FieldInfo]":
     Returns:
         `True` if `val` is `FieldInfo` created by [`Dependency()`][starlite.params.Dependency] function.
     """
-    return isinstance(val, FieldInfo) and bool(val.extra.get(EXTRA_KEY_IS_DEPENDENCY))
+    return isinstance(val, dict) and bool(val.get(EXTRA_KEY_IS_DEPENDENCY))
 
 
 def should_skip_dependency_validation(val: Any) -> bool:

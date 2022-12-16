@@ -13,7 +13,6 @@ from typing import (
 )
 
 from anyio import create_task_group
-from pydantic_factories.utils import is_optional
 
 from starlite.constants import EXTRA_KEY_IS_PARAMETER, RESERVED_KWARGS
 from starlite.datastructures.provide import DependencyCleanupGroup, Provide
@@ -43,11 +42,15 @@ from starlite.kwargs.parameter_definition import (
     merge_parameter_sets,
 )
 from starlite.signature import SignatureModel, get_signature_model
-from starlite.utils.dataclass import is_optional_dataclass_field
+from starlite.utils.dataclass import (
+    get_dataclass_default_value,
+    is_optional_dataclass_field,
+    is_sequence_type_field,
+)
 
 if TYPE_CHECKING:
     from starlite.connection import ASGIConnection
-    from starlite.types import ReservedKwargs, DataclassFields
+    from starlite.types import DataclassFields, ReservedKwargs
 
 
 class KwargsModel:
@@ -181,7 +184,7 @@ class KwargsModel:
         path_parameters: Set[str],
         layered_parameters: Dict[str, Field],
         dependencies: Dict[str, Provide],
-        signature_dataclass_fields: Dict[str, Field],
+        signature_dataclass_fields: Tuple[Field, ...],
     ) -> Tuple[Set[ParameterDefinition], Set[Dependency]]:
         """Get parameter_definitions for the construction of KwargsModel instance.
 
@@ -189,7 +192,7 @@ class KwargsModel:
             path_parameters: Any expected path parameters.
             layered_parameters: A string keyed dictionary of layered parameters.
             dependencies: A string keyed dictionary mapping dependency providers.
-            signature_dataclass_fields: __fields__ definition from SignatureModel.
+            signature_dataclass_fields: Dataclass definitions from the SignatureModel.
 
         Returns:
             A Tuple of sets
@@ -205,10 +208,11 @@ class KwargsModel:
             *(
                 create_parameter_definition(
                     allow_none=dataclass_field.type,
+                    default_value=get_dataclass_default_value(field=dataclass_field),
                     field_name=field_name,
-                    field_info=dataclass_field.field_info,
+                    is_sequence=is_sequence_type_field(field=dataclass_field),
+                    metadata=dataclass_field.metadata,
                     path_parameters=path_parameters,
-                    is_sequence=dataclass_field.shape in sequence_shapes,
                 )
                 for field_name, dataclass_field in layered_parameters.items()
                 if field_name not in ignored_keys and field_name not in signature_dataclass_fields
@@ -216,41 +220,40 @@ class KwargsModel:
             *(
                 create_parameter_definition(
                     allow_none=is_optional_dataclass_field(dataclass_field),
-                    field_name=field_name,
-                    field_info=dataclass_field.metadata,
+                    default_value=get_dataclass_default_value(field=dataclass_field),
+                    field_name=dataclass_field.name,
+                    is_sequence=is_sequence_type_field(field=dataclass_field),
+                    metadata=dataclass_field.metadata,
                     path_parameters=path_parameters,
-                    is_sequence=dataclass_field.shape in sequence_shapes,
                 )
-                for field_name, dataclass_field in signature_dataclass_fields.items()
-                if field_name not in ignored_keys and field_name not in layered_parameters
+                for dataclass_field in signature_dataclass_fields
+                if dataclass_field.name not in ignored_keys and dataclass_field.name not in layered_parameters
             ),
         }
 
-        for field_name, dataclass_field in filter(
-            lambda items: items[0] not in ignored_keys and items[0] in layered_parameters,
-            signature_dataclass_fields.items(),
-        ):
-            layer_field_info = layered_parameters[field_name].field_info
-            signature_field_info = dataclass_field.field_info
+        for dataclass_field in [
+            field
+            for field in signature_dataclass_fields
+            if field.name not in layered_parameters and field.name not in ignored_keys
+        ]:
+            layer_field = layered_parameters[dataclass_field.name]
 
-            field_info = layer_field_info
             # allow users to manually override Parameter definition using Parameter
-            if signature_field_info.extra.get(EXTRA_KEY_IS_PARAMETER):
-                field_info = signature_field_info
-
-            field_info.default = (
-                signature_field_info.default
-                if signature_field_info.default not in {Ellipsis}
-                else layer_field_info.default
-            )
+            if signature_field := dataclass_field.metadata.get(EXTRA_KEY_IS_PARAMETER):
+                metadata = signature_field.metadata
+                default_value = get_dataclass_default_value(signature_field)
+            else:
+                metadata = layer_field.metadata
+                default_value = get_dataclass_default_value(layer_field)
 
             param_definitions.add(
                 create_parameter_definition(
-                    allow_none=dataclass_field.allow_none,
-                    field_name=field_name,
-                    field_info=field_info,
+                    allow_none=is_optional_dataclass_field(field=dataclass_field),
+                    field_name=dataclass_field.name,
+                    metadata=metadata,
+                    default_value=default_value,
                     path_parameters=path_parameters,
-                    is_sequence=dataclass_field.shape in sequence_shapes,
+                    is_sequence=is_sequence_type_field(field=dataclass_field),
                 )
             )
         return param_definitions, expected_dependencies
@@ -300,17 +303,19 @@ class KwargsModel:
 
         expected_form_data = None
         expected_msgpack_data = None
-        data_dataclass_field = signature_model.__fields__.get("data")
+        filtered_fields = [f for f in signature_model.dataclass_fields if f.name == "data"]
+        data_field = filtered_fields[0] if filtered_fields else None
 
-        if data_dataclass_field:
-            media_type = data_dataclass_field.field_info.extra.get("media_type")
+        if data_field:
+            data_field = filtered_fields[0]
+            media_type = data_field.metadata.get("media_type")
             if media_type in (
                 RequestEncodingType.MULTI_PART,
                 RequestEncodingType.URL_ENCODED,
             ):
-                expected_form_data = (media_type, data_dataclass_field)
+                expected_form_data = (media_type, data_field)
             elif media_type == RequestEncodingType.MESSAGEPACK:
-                expected_msgpack_data = data_dataclass_field
+                expected_msgpack_data = data_field
 
         for dependency in expected_dependencies:
             dependency_kwargs_model = cls.create_for_signature_model(
@@ -349,8 +354,8 @@ class KwargsModel:
             expected_header_params=expected_header_parameters,
             expected_reserved_kwargs=cast("Set[ReservedKwargs]", expected_reserved_kwargs),
             sequence_query_parameter_names=sequence_query_parameter_names,
-            is_data_optional=is_optional(signature_model.__fields__["data"])
-            if "data" in expected_reserved_kwargs
+            is_data_optional=is_optional_dataclass_field(field=data_field)
+            if "data" in expected_reserved_kwargs and data_field
             else False,
         )
 
@@ -396,11 +401,15 @@ class KwargsModel:
         list.
         """
         provide = dependencies[key]
-        sub_dependency_keys = [k for k in get_signature_model(provide).__fields__ if k in dependencies]
+        sub_dependency_keys = [
+            field.name for field in get_signature_model(provide).dataclass_fields if field.name in dependencies
+        ]
         return Dependency(
             key=key,
             provide=provide,
-            dependencies=[cls._create_dependency_graph(key=k, dependencies=dependencies) for k in sub_dependency_keys],
+            dependencies=[
+                cls._create_dependency_graph(key=key, dependencies=dependencies) for key in sub_dependency_keys
+            ],
         )
 
     @classmethod

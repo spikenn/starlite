@@ -1,12 +1,9 @@
-from typing import TYPE_CHECKING, Any, NamedTuple, Set
-
-from pydantic.fields import Undefined
+from dataclasses import MISSING
+from types import MappingProxyType
+from typing import Any, NamedTuple, Set
 
 from starlite.constants import EXTRA_KEY_REQUIRED
 from starlite.enums import ParamType
-
-if TYPE_CHECKING:
-    from pydantic.fields import FieldInfo
 
 
 class ParameterDefinition(NamedTuple):
@@ -21,36 +18,41 @@ class ParameterDefinition(NamedTuple):
 
 
 def create_parameter_definition(
-    allow_none: bool, field_info: "FieldInfo", field_name: str, path_parameters: Set[str], is_sequence: bool
+    allow_none: bool,
+    metadata: MappingProxyType,
+    default_value: Any,
+    field_name: str,
+    path_parameters: Set[str],
+    is_sequence: bool,
 ) -> ParameterDefinition:
     """Create a ParameterDefinition for the given pydantic FieldInfo instance and inserts it into the correct parameter
     set.
 
     Args:
         allow_none: Whether 'None' is an allowed value for the parameter.
-        field_info: A pydantic field info.
+        metadata: Dataclass field metadata.
         field_name: The field's name.
+        default_value: The field's default value.
         path_parameters: A set of path parameter names.
         is_sequence: Whether the value of the parameter is a sequence.
 
     Returns:
         A ParameterDefinition tuple.
     """
-    extra = field_info.extra
-    is_required = extra.get(EXTRA_KEY_REQUIRED, True)
-    default_value = field_info.default if field_info.default is not Undefined else None
+    is_required = metadata.get(EXTRA_KEY_REQUIRED, True)
+    default_value = default_value if default_value is not MISSING else None
 
-    field_alias = extra.get(ParamType.QUERY) or field_name
+    field_alias = metadata.get(ParamType.QUERY) or field_name
     param_type = ParamType.QUERY
 
     if field_name in path_parameters:
         field_alias = field_name
         param_type = ParamType.PATH
-    elif extra.get(ParamType.HEADER):
-        field_alias = extra[ParamType.HEADER]
+    elif metadata.get(ParamType.HEADER):
+        field_alias = metadata[ParamType.HEADER]
         param_type = ParamType.HEADER
-    elif extra.get(ParamType.COOKIE):
-        field_alias = extra[ParamType.COOKIE]
+    elif metadata.get(ParamType.COOKIE):
+        field_alias = metadata[ParamType.COOKIE]
         param_type = ParamType.COOKIE
 
     return ParameterDefinition(

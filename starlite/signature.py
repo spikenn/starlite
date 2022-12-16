@@ -1,3 +1,6 @@
+from dataclasses import MISSING
+from dataclasses import Field as DataclassField
+from dataclasses import fields as get_dataclass_fields
 from dataclasses import make_dataclass
 from inspect import Parameter, Signature
 from typing import (
@@ -15,10 +18,8 @@ from typing import (
 )
 
 from pydantic_factories import ModelFactory
-from dataclasses import MISSING
 from typing_extensions import get_args
-from dataclasses import fields as get_dataclass_fields
-from dataclasses import Field as DataclassField
+
 from starlite.connection import Request
 from starlite.enums import ScopeType
 from starlite.exceptions import (
@@ -43,7 +44,6 @@ if TYPE_CHECKING:
 
 
 SKIP_NAMES = {"self", "cls"}
-SKIP_VALIDATION_NAMES = {"request", "socket", "scope", "receive", "send"}
 
 
 class SignatureModel:
@@ -68,7 +68,7 @@ class SignatureModel:
         if signature.field_plugin_mappings:
             return {field.name: signature.resolve_field_value(field.name) for field in cls.dataclass_fields}
         return {
-            field.name: getattr(cls, field.name)  # pylint: disable=unnecessary-dunder-call
+            field.name: getattr(signature, field.name)  # pylint: disable=unnecessary-dunder-call
             for field in cls.dataclass_fields
         }
 
@@ -273,7 +273,7 @@ class SignatureModelFactory:
         if parameter.default not in {Signature.empty, MISSING}:
             return parameter.annotation, parameter.default
         if not parameter.optional:
-            return parameter.annotation, ...
+            return parameter.annotation
         return parameter.annotation, None
 
     @property
@@ -287,18 +287,6 @@ class SignatureModelFactory:
         for name, parameter in filter(lambda x: x[0] not in SKIP_NAMES, self.signature.parameters.items()):
             yield SignatureParameter(self.fn_name, name, parameter)
 
-    @staticmethod
-    def should_skip_parameter_validation(parameter: SignatureParameter) -> bool:
-        """Identify dependencies for which provided values should not be validated.
-
-        Args:
-            parameter (SignatureParameter): A parameter to be added to the signature model.
-
-        Returns:
-            A boolean indicating whether injected values for this parameter should not be validated.
-        """
-        return parameter.name in SKIP_VALIDATION_NAMES or should_skip_dependency_validation(parameter.default)
-
     def __call__(self) -> Type[SignatureModel]:
         """Construct a `SignatureModel` type that represents the signature of `self.fn`
 
@@ -310,24 +298,30 @@ class SignatureModelFactory:
                 self.check_for_unprovided_dependency(parameter)
                 self.collect_dependency_names(parameter)
                 self.set_field_default(parameter)
-                if self.should_skip_parameter_validation(parameter):
+
+                if should_skip_dependency_validation(parameter):
                     if is_dependency_field(parameter.default):
                         self.field_definitions[parameter.name] = (Any, parameter.default.default)
                     else:
-                        self.field_definitions[parameter.name] = (Any, ...)
+                        self.field_definitions[parameter.name] = Any
                     continue
+
                 if ModelFactory.is_constrained_field(parameter.default):
-                    self.field_definitions[parameter.name] = (parameter.default, ...)
+                    self.field_definitions[parameter.name] = parameter.default
                     continue
+
                 plugin = get_plugin_for_value(value=parameter.annotation, plugins=self.plugins)
                 if plugin:
                     parameter.annotation = self.get_type_annotation_from_plugin(parameter, plugin)
+
                 self.field_definitions[parameter.name] = self.create_field_definition_from_parameter(parameter)
+
             model = make_dataclass(
                 cls_name=self.fn_name + "_signature_model",
                 fields=self.field_definitions,
                 bases=(SignatureModel,),
             )
+
             model.__slots__ = (*SignatureModel.__slots__, *set(self.field_definitions))
             model.dataclass_fields = get_dataclass_fields(model)
             model.return_annotation = self.signature.return_annotation

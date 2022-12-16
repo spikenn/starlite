@@ -58,6 +58,7 @@ from .callable_types import (
     Serializer,
 )
 from .composite_types import (
+    DataclassFields,
     Dependencies,
     ExceptionHandlersMap,
     MaybePartial,
@@ -67,7 +68,6 @@ from .composite_types import (
     ResponseCookies,
     ResponseHeadersMap,
     Scopes,
-    DataclassFields,
 )
 from .empty import Empty, EmptyType
 from .file_types import FileInfo, FileSystemProtocol

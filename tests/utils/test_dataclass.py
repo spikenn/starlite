@@ -1,9 +1,12 @@
-from dataclasses import dataclass, fields, field
-from typing import Optional, Any
+from dataclasses import dataclass, field, fields
+from typing import Any, Optional
 
 import pytest
 
-from starlite.utils.dataclass import is_optional_dataclass_field, dataclass_field_has_default_value
+from starlite.utils.dataclass import (
+    dataclass_field_has_default_value,
+    is_optional_dataclass_field,
+)
 
 
 @pytest.mark.parametrize(
