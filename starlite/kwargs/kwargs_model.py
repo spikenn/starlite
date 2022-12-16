@@ -234,7 +234,7 @@ class KwargsModel:
         for dataclass_field in [
             field
             for field in signature_dataclass_fields
-            if field.name not in layered_parameters and field.name not in ignored_keys
+            if field.name in layered_parameters and field.name not in ignored_keys
         ]:
             layer_field = layered_parameters[dataclass_field.name]
 

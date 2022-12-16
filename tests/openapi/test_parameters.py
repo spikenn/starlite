@@ -10,6 +10,7 @@ from starlite.openapi.enums import OpenAPIType
 from starlite.openapi.parameters import create_parameter_for_handler
 from starlite.signature import SignatureModelFactory
 from starlite.utils import find_index
+from starlite.utils.model import convert_model_field_to_dataclass_field, convert_dataclass_to_model
 from tests.openapi.utils import PersonController
 
 if TYPE_CHECKING:
@@ -23,11 +24,10 @@ def _create_parameters(app: Starlite, path: str) -> List["OpenAPIParameter"]:
     index = find_index(app.routes, lambda x: x.path_format == path)
     route = app.routes[index]
     route_handler = route.route_handler_map["GET"][0]  # type: ignore
-    handler_fields = (
-        SignatureModelFactory(fn=cast("Callable", route_handler.fn.value), plugins=[], dependency_names=set())
-        .create_signature_model()
-        .__fields__
-    )
+    handler_fields = convert_dataclass_to_model(
+        SignatureModelFactory(fn=cast("Callable", route_handler.fn.value), plugins=[], dependency_names=set())()
+    ).__fields__
+
     return create_parameter_for_handler(
         route_handler=route_handler,
         handler_fields=handler_fields,

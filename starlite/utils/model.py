@@ -1,11 +1,13 @@
+from dataclasses import field, MISSING
 from typing import TYPE_CHECKING, Any, Dict, Type, cast
 
 from pydantic import BaseConfig, BaseModel, create_model, create_model_from_typeddict
 from pydantic_factories.utils import create_model_from_dataclass
+from pydantic.fields import Undefined
 
 if TYPE_CHECKING:
     from pydantic.fields import ModelField
-
+    from dataclass import Field
     from starlite.types.builtin_types import DataclassClassOrInstance, TypedDictClass
 
 
@@ -43,3 +45,16 @@ def convert_typeddict_to_model(typeddict: "TypedDictClass") -> Type[BaseModel]:
     if not existing:
         _type_model_map[typeddict] = existing = create_model_from_typeddict(typeddict)
     return existing
+
+
+def convert_model_field_to_dataclass_field(model_field: "ModelField") -> "Field":
+    dataclass_field = field(
+        default=model_field.default if (model_field.default and model_field.default is not Undefined) else MISSING,
+        default_factory=model_field.default_factory
+        if (model_field.default_factory and model_field.default_factory is not Undefined)
+        else MISSING,
+        metadata=model_field.field_info.extra,
+    )
+    dataclass_field.name = model_field.name
+    dataclass_field.type = model_field.outer_type_
+    return dataclass_field

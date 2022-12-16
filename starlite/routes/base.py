@@ -18,6 +18,7 @@ from starlite.kwargs import KwargsModel
 from starlite.signature import get_signature_model
 from starlite.types.internal_types import PathParameterDefinition
 from starlite.utils import join_paths, normalize_path
+from starlite.utils.model import convert_model_field_to_dataclass_field
 
 if TYPE_CHECKING:
     from starlite.enums import ScopeType
@@ -122,7 +123,10 @@ class BaseRoute(ABC):
             signature_model=signature_model,
             dependencies=dependencies,
             path_parameters=path_parameters,
-            layered_parameters=route_handler.resolve_layered_parameters(),
+            layered_parameters=dict(
+                (field_name, convert_model_field_to_dataclass_field(model_field=model_field))
+                for field_name, model_field in route_handler.resolve_layered_parameters().items()
+            ),
         )
 
     @staticmethod
